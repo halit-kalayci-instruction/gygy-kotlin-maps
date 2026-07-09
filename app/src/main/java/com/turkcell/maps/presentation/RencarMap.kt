@@ -4,6 +4,7 @@ import android.graphics.Color
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +31,8 @@ import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
 
 val DEFAULT_CENTER: LatLng = LatLng(38.51740367746754, 27.161930350129918)
+
+private val ME_MARKER_COLOR = Color.parseColor("#4285F4")
 
 class RencarMapController internal constructor() {
     internal var map: MapLibreMap? = null
@@ -83,37 +86,58 @@ fun RencarMap(
        }
     }
 
-    // AndroidView -> Android ile @Composable köprüsü.
-    AndroidView(factory = { mapView }, modifier = modifier) { mv ->
-        val ready = mapAndStyle
-        if(ready==null)
-        {
-            mv.getMapAsync { map ->
-                controller?.map = map
+    // Harita ve stil kurulumu -> yalnızca bir kez çalışır.
+    LaunchedEffect(Unit) {
+        mapView.getMapAsync { map ->
+            controller?.map = map
 
-                map.cameraPosition = CameraPosition.Builder().target(initialCenter).zoom(initialZoom).build()
-                map.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) {
-                    loaded ->
-                    loaded.addSource(GeoJsonSource("me"))
-                    loaded.addLayer(
-                        CircleLayer("me-layer","me").withProperties(
-                            PropertyFactory.circleColor(Color.BLUE)
-                        )
+            map.cameraPosition = CameraPosition.Builder().target(initialCenter).zoom(initialZoom).build()
+            map.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) {
+                loaded ->
+                loaded.addSource(GeoJsonSource("me"))
+                // Dış halka -> konumun etrafında yumuşak, yarı saydam bir halo.
+                loaded.addLayer(
+                    CircleLayer("me-halo-layer","me").withProperties(
+                        PropertyFactory.circleColor(ME_MARKER_COLOR),
+                        PropertyFactory.circleRadius(20f),
+                        PropertyFactory.circleOpacity(0.2f),
+                        PropertyFactory.circleBlur(0.4f)
                     )
-                    mapAndStyle = map to loaded
-                }
-            }
-        }
-        else {
-            val (map, style) = ready
-            updateMe(style, myLocation)
-            if (myLocation != null)
-            {
-                Log.d("MAP", "LOKASYON : ${myLocation.latitude} ${myLocation.longitude}")
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(myLocation, 10.0))
+                )
+                // İç nokta -> beyaz kenarlıklı mavi nokta ("my location" tarzı).
+                loaded.addLayer(
+                    CircleLayer("me-layer","me").withProperties(
+                        PropertyFactory.circleColor(ME_MARKER_COLOR),
+                        PropertyFactory.circleRadius(9f),
+                        PropertyFactory.circleStrokeColor(Color.WHITE),
+                        PropertyFactory.circleStrokeWidth(3f)
+                    )
+                )
+                mapAndStyle = map to loaded
             }
         }
     }
+
+    // Konum noktası -> myLocation her değiştiğinde güncellenir, kamera oynamaz.
+    LaunchedEffect(mapAndStyle, myLocation) {
+        val (_, style) = mapAndStyle ?: return@LaunchedEffect
+        updateMe(style, myLocation)
+    }
+
+    // İlk açılışta kullanıcı konumuna tek seferlik zoom.
+    var hasZoomedToUser by remember { mutableStateOf(false) }
+    LaunchedEffect(mapAndStyle, myLocation) {
+        if (hasZoomedToUser) return@LaunchedEffect
+        val (map, _) = mapAndStyle ?: return@LaunchedEffect
+        val location = myLocation ?: return@LaunchedEffect
+
+        hasZoomedToUser = true
+        Log.d("MAP", "İlk zoom -> lat: ${location.latitude}, lng: ${location.longitude}, zoom: 10.0")
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 10.0))
+    }
+
+    // AndroidView -> Android ile @Composable köprüsü.
+    AndroidView(factory = { mapView }, modifier = modifier)
 }
 
 private fun updateMe(style: Style, myLocation: LatLng?)
